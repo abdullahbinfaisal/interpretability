@@ -1,110 +1,12 @@
-"""
-Module for training Sparse Autoencoder (SAE) models.
-"""
-
 import time
-from collections import defaultdict
-
 import torch
-from einops import rearrange
-
-from ..metrics import l2, r2_score, l0_eps
-from .trackers import DeadCodeTracker
+from overcomplete.sae.trackers import DeadCodeTracker
+from tqdm import tqdm
 
 
-def extract_input(batch):
-    """
-    Extracts the input data from a batch. Supports different batch types:
-    - If the batch is a tuple or list, returns the first element.
-    - If the batch is a dict, tries to return the value with key 'data' (or 'input').
-    - Otherwise, assumes the batch is the input data.
-    """
-    if isinstance(batch, (tuple, list)):
-        return batch[0]
-    elif isinstance(batch, dict):
-        return batch.get('data')
-    else:
-        return batch
+# Assume I have a batch inside a dataloader corresponding to: image_model1, activations_model1 etc
 
-
-def _compute_reconstruction_error(x, x_hat):
-    """
-    Try to match the shapes of x and x_hat to compute the reconstruction error.
-
-    If the input (x) shape is 4D assume it is (n, c, w, h), if it is 3D assume
-    it is (n, t, c). Else, assume it is already flattened.
-
-    Concerning the reconstruction error, we want a measure that could be compared
-    across different input shapes, so we use the R2 score: 1 means perfect
-    reconstruction, 0 means no reconstruction at all.
-
-    Parameters
-    ----------
-    x : torch.Tensor
-        Input tensor.
-    x_hat : torch.Tensor
-        Reconstructed tensor.
-
-    Returns
-    -------
-    float
-        Reconstruction error.
-    """
-    if len(x.shape) == 4 and len(x_hat.shape) == 2:
-        x_flatten = rearrange(x, 'n c w h -> (n w h) c')
-    elif len(x.shape) == 3 and len(x_hat.shape) == 2:
-        x_flatten = rearrange(x, 'n t c -> (n t) c')
-    else:
-        assert x.shape == x_hat.shape, "Input and output shapes must match."
-        x_flatten = x
-
-    r2 = r2_score(x_flatten, x_hat)
-
-    return r2.item()
-
-
-def _log_metrics(monitoring, logs, model, z, loss, optimizer):
-    """
-    Log training metrics for the current training step.
-
-    Parameters
-    ----------
-    monitoring : int
-        Monitoring level, for 1 store only basic statistics, for 2 store more detailed statistics.
-    logs : defaultdict
-        Logs of training statistics.
-    model : nn.Module
-        The SAE model.
-    z : torch.Tensor
-        Encoded tensor.
-    loss : torch.Tensor
-        Loss value.
-    optimizer : optim.Optimizer
-        Optimizer for updating model parameters.
-    """
-    if monitoring == 0:
-        return
-
-    if monitoring > 0:
-        logs['lr'].append(optimizer.param_groups[0]['lr'])
-        logs['step_loss'].append(loss.item())
-
-    if monitoring > 1:
-        # store directly some z values
-        # and the params / gradients norms
-        logs['z'].append(z.detach()[::10])
-        logs['z_l2'].append(l2(z).item())
-
-        logs['dictionary_sparsity'].append(l0_eps(model.get_dictionary()).mean().item())
-        logs['dictionary_norms'].append(l2(model.get_dictionary(), -1).mean().item())
-
-        for name, param in model.named_parameters():
-            if param.grad is not None:
-                logs[f'params_norm_{name}'].append(l2(param).item())
-                logs[f'params_grad_norm_{name}'].append(l2(param.grad).item())
-
-
-def train_sae(names, models, dataloader, criterion, optimizers, schedulers=None,
+def train_usae(names, models, dataloader, criterion, optimizers, schedulers=None,
               nb_epochs=20, clip_grad=1.0, monitoring=1, device="cpu"):
     """
     Train a Sparse Autoencoder (SAE) model.
@@ -112,7 +14,7 @@ def train_sae(names, models, dataloader, criterion, optimizers, schedulers=None,
     Parameters
     ----------
     names: List of Model Names [string]
-    models : Dict of Models { nn.Module } 
+    models : Dict of Models (Sparse Autoencoders { nn.Module })
         The SAE model to train.
     dataloader : DataLoader
         DataLoader providing the training data.
@@ -140,73 +42,66 @@ def train_sae(names, models, dataloader, criterion, optimizers, schedulers=None,
     defaultdict
         Logs of training statistics.
     """
-    logs = defaultdict(list)
 
     for epoch in range(nb_epochs):
-        
-        for name in names:
-            models[name].train()
 
         start_time = time.time()
         epoch_loss = 0.0
-        epoch_error = 0.0
-        epoch_sparsity = 0.0
-        batch_count = 0
-
         dead_tracker = None
-
         rotator = 0
+
+        for name in names:
+            models[name].to(device)
+
+        # tqdm dataloader
+        progress_bar = tqdm(enumerate(dataloader), total=len(dataloader), desc=f"Epoch {epoch+1}/{nb_epochs}")
         
-        for batch in dataloader:
-            batch_count += 1
-            x = extract_input(batch).to(device, non_blocking=True)
-            
+        for batch_count, batch in progress_bar:
+            # Reset Everything
+            total_loss = 0.0
             for name in names:
                 optimizers[name].zero_grad()
+                models[name].eval()
 
-            model = models[names[rotator]]
+            # Current SAE
+            current = names[rotator]
 
-            z_pre, z, x_hat = model(x)
-            loss = criterion(x, x_hat, z_pre, z, model.get_dictionary())
+            # Current SAE model
+            sae = models[current]
+            sae.train()
 
-            # init dead code tracker with first batch
+            # Encoder Forward Pass
+            z_pre, z = sae.encode(batch[f"activations_{names[rotator]}"].squeeze().to(device))
+
+            # Decoder across all models & accumulate loss
+            for n, m in models.items():
+                x_hat = m.decode(z)
+                total_loss += criterion(x_hat, batch[f"activations_{n}"].squeeze().to(device))
+
+            # Backward + Optimize
+            total_loss.backward()
+            optimizers[current].step()
+            if schedulers:
+                schedulers[current].step()
+
+            # Rotator Update
+            rotator += 1
+            rotator = rotator % len(names)
+
+            # Dead feature tracking
             if dead_tracker is None:
                 dead_tracker = DeadCodeTracker(z.shape[1], device)
             dead_tracker.update(z)
 
-            loss.backward()
+            # Update metrics and tqdm bar
+            batch_loss = total_loss.item()
+            epoch_loss += batch_loss
+            progress_bar.set_postfix(loss=batch_loss)
 
-            if clip_grad:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad)
+            rotator = (rotator + 1) % len(names)
 
-            optimizer.step()
+        # Epoch summary
+        dead_features = dead_tracker.report()
+        print(f"\n[Epoch {epoch+1}] Loss: {epoch_loss:.4f} | Dead Features: {dead_features} | Time: {time.time() - start_time:.2f}s")
 
-            if scheduler is not None:
-                scheduler.step()
-
-            if monitoring:
-                epoch_loss += loss.item()
-                epoch_error += _compute_reconstruction_error(x, x_hat)
-                epoch_sparsity += l0_eps(z, 0).sum().item()
-                _log_metrics(monitoring, logs, model, z, loss, optimizer)
-
-        if monitoring and batch_count > 0:
-            avg_loss = epoch_loss / batch_count
-            avg_error = epoch_error / batch_count
-            avg_sparsity = epoch_sparsity / batch_count
-            dead_ratio = dead_tracker.get_dead_ratio()
-            epoch_duration = time.time() - start_time
-
-            logs['avg_loss'].append(avg_loss)
-            logs['r2'].append(avg_error)
-            logs['time_epoch'].append(epoch_duration)
-            logs['z_sparsity'].append(avg_sparsity)
-            logs['dead_features'].append(dead_ratio)
-
-            print(f"Epoch[{epoch+1}/{nb_epochs}], Loss: {avg_loss:.4f}, "
-                  f"R2: {avg_error:.4f}, L0: {avg_sparsity:.4f}, "
-                  f"Dead Features: {dead_ratio*100:.1f}%, "
-                  f"Time: {epoch_duration:.4f} seconds")
-
-    return logs
-
+    return 
