@@ -72,15 +72,22 @@ def train_usae(names, models, dataloader, criterion, optimizers, schedulers=None
 
             # Encoder Forward Pass
             z_pre, z = sae.encode(batch[f"activations_{names[rotator]}"].squeeze().to(device))
-            print("Z Shape: ", z.shape)
+            #print("Z Shape: ", z.shape)
 
             # Decoder across all models & accumulate loss
             for n, m in models.items():
-                x_hat = m.decode(z)
-                print("Model Name: ", n)
-                print("Latent Shape: ", z.shape)
-                print("Recon Shape: ", x_hat.shape)
-                print("Batch Shape: ", batch[f"activations_{n}"].squeeze().shape)
+                
+                if n == current:
+                    x_hat = m.decode(z)
+                else:
+                    with torch.no_grad():
+                        x_hat = m.decode(z.detach())
+                
+                # x_hat = m.decode(z)
+                # print("Model Name: ", n)
+                # print("Latent Shape: ", z.shape)
+                # print("Recon Shape: ", x_hat.shape)
+                # print("Batch Shape: ", batch[f"activations_{n}"].squeeze().shape)
                 total_loss += criterion(x_hat, batch[f"activations_{n}"].squeeze().to(device))
 
             # Backward + Optimize
@@ -106,7 +113,7 @@ def train_usae(names, models, dataloader, criterion, optimizers, schedulers=None
             rotator = (rotator + 1) % len(names)
 
         # Epoch summary
-        dead_features = dead_tracker.report()
-        print(f"\n[Epoch {epoch+1}] Loss: {epoch_loss:.4f} | Dead Features: {dead_features} | Time: {time.time() - start_time:.2f}s")
+        #dead_features = dead_tracker.report()
+        print(f"\n[Epoch {epoch+1}] Loss: {epoch_loss:.4f} | Time: {time.time() - start_time:.2f}s")
 
     return 

@@ -7,10 +7,24 @@ from torch.utils.data import Dataset, DataLoader
 import glob
 from einops import rearrange
 from tqdm import tqdm
+import torch.nn.functional as F
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+
+def get_normalization_parameters(model):
+    # Normalize across 1024 samples
+    image_loader = Load_ImageNet100(transform=None, batch_size=1024, shuffle=True)
+    img, _ = next(iter(image_loader))
+    
+    # Get activations and return normalization parameters
+    activations = model.forward_features(img.to(device))
+    flat = activations.permute(1, 0, 2).reshape(activations.shape[1], -1)  # (D, N*T)
+    mean = flat.mean(dim=1) 
+    std = flat.std(dim=1)
+    return mean, std
+    
 
 def generate_activations(models, image_dataloader, max_seq_len, save_dir, rearrange_string):
     os.makedirs(save_dir, exist_ok=True)
@@ -20,11 +34,23 @@ def generate_activations(models, image_dataloader, max_seq_len, save_dir, rearra
             batch_data = {'images': images.cpu()}
             
             for key, model in models.items():
+                
+                # Get Activations
                 activations = model.forward_features(images)
-                padded = torch.zeros(activations.shape[0], max_seq_len, activations.shape[-1], device=device)
-                padded[:, :activations.shape[1], :] = activations
-                activations = rearrange(padded, rearrange_string)
-                batch_data[f"activations_{key}"] = padded.cpu()
+                
+                # Interpolate Activation Tokens
+                activations = activations.permute(0, 2, 1)  # Shape: (300, 382, 192)
+                x_interp = F.interpolate(activations, size=max_seq_len, mode='linear', align_corners=False)
+                x_interp = x_interp.permute(0, 2, 1)
+
+                # Normalize Activations
+                mean, std = get_normalization_parameters(model)
+                x_interp = (x_interp - mean.view(1, -1, 1))
+                x_interp = x_interp / (std.view(1, -1, 1) + 1e-6)
+
+                # Batch Collapse
+                activations = rearrange(x_interp, rearrange_string)
+                batch_data[f"activations_{key}"] = activations.cpu()
 
             torch.save(batch_data, os.path.join(save_dir, f"batch_{i:05d}.pt"))
             
