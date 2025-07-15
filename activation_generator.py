@@ -12,22 +12,22 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 
-def generate_activations(models, image_dataloader, save_dir, rearrange_string):
+def generate_activations(models, image_dataloader, max_seq_len, save_dir, rearrange_string):
     os.makedirs(save_dir, exist_ok=True)
-    for key, model in models.items():
-        
-        with torch.no_grad():
-            for i, (images, _) in enumerate(tqdm(image_dataloader, desc="Processing Batches")):
-                images = images.to(device)
-                batch_data = {'images': images.cpu()}
-                
-                for key, model in models.items():
-                    activations = model.forward_features(images)
-                    activations = rearrange(activations, rearrange_string)
-                    batch_data[f"activations_{key}"] = activations.cpu()
+    with torch.no_grad():
+        for i, (images, _) in enumerate(tqdm(image_dataloader, desc="Processing Batches")):
+            images = images.to(device)
+            batch_data = {'images': images.cpu()}
+            
+            for key, model in models.items():
+                activations = model.forward_features(images)
+                padded = torch.zeros(activations.shape[0], max_seq_len, activations.shape[-1], device=device)
+                padded[:, :activations.shape[1], :] = activations
+                activations = rearrange(padded, rearrange_string)
+                batch_data[f"activations_{key}"] = padded.cpu()
 
-                torch.save(batch_data, os.path.join(save_dir, f"batch_{i:05d}.pt"))
-                
+            torch.save(batch_data, os.path.join(save_dir, f"batch_{i:05d}.pt"))
+            
 
 
 class PTFilesDataset(Dataset):
@@ -50,11 +50,11 @@ class PTFilesDataset(Dataset):
         return data_dict
 
 
-def Load_activation_dataloader(models, image_dataloader, save_dir, generate, rearrange_string=None):
+def Load_activation_dataloader(models, image_dataloader, save_dir, generate, max_seq_len, rearrange_string=None):
     
 
     if generate == True and rearrange_string is not None:
-        generate_activations(models, image_dataloader, save_dir, rearrange_string)
+        generate_activations(models, image_dataloader, max_seq_len, save_dir, rearrange_string)
     
     dataset = PTFilesDataset(directory_path=save_dir)
 

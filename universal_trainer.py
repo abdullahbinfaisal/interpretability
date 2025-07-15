@@ -72,10 +72,15 @@ def train_usae(names, models, dataloader, criterion, optimizers, schedulers=None
 
             # Encoder Forward Pass
             z_pre, z = sae.encode(batch[f"activations_{names[rotator]}"].squeeze().to(device))
+            print("Z Shape: ", z.shape)
 
             # Decoder across all models & accumulate loss
             for n, m in models.items():
                 x_hat = m.decode(z)
+                print("Model Name: ", n)
+                print("Latent Shape: ", z.shape)
+                print("Recon Shape: ", x_hat.shape)
+                print("Batch Shape: ", batch[f"activations_{n}"].squeeze().shape)
                 total_loss += criterion(x_hat, batch[f"activations_{n}"].squeeze().to(device))
 
             # Backward + Optimize
