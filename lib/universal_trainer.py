@@ -2,7 +2,8 @@ import time
 import torch
 from overcomplete.sae.trackers import DeadCodeTracker
 from tqdm import tqdm
-
+import matplotlib.pyplot as plt
+from collections import defaultdict
 
 # Assume I have a batch inside a dataloader corresponding to: image_model1, activations_model1 etc
 
@@ -42,11 +43,14 @@ def train_usae(names, models, dataloader, criterion, optimizers, schedulers=None
     defaultdict
         Logs of training statistics.
     """
+    total_loss_per_epoch = []  # Total loss over all models
+    individual_loss_per_epoch = defaultdict(list)  # Per-model losses per epoch
 
     for epoch in range(nb_epochs):
 
         start_time = time.time()
         epoch_loss = 0.0
+        epoch_model_losses = {name: 0.0 for name in names}  # Reset per-model epoch loss
         dead_tracker = None
         rotator = 0
 
@@ -83,12 +87,11 @@ def train_usae(names, models, dataloader, criterion, optimizers, schedulers=None
                     with torch.no_grad():
                         x_hat = m.decode(z.detach())
                 
-                # x_hat = m.decode(z)
-                # print("Model Name: ", n)
-                # print("Latent Shape: ", z.shape)
-                # print("Recon Shape: ", x_hat.shape)
-                # print("Batch Shape: ", batch[f"activations_{n}"].squeeze().shape)
-                total_loss += criterion(x_hat, batch[f"activations_{n}"].squeeze().to(device))
+                target = batch[f"activations_{n}"].squeeze().to(device)
+                loss = criterion(x_hat, target)
+
+                epoch_model_losses[n] += loss.item()
+                total_loss += loss
 
             # Backward + Optimize
             total_loss.backward()
@@ -109,11 +112,29 @@ def train_usae(names, models, dataloader, criterion, optimizers, schedulers=None
             batch_loss = total_loss.item()
             epoch_loss += batch_loss
             progress_bar.set_postfix(loss=batch_loss)
-
-            rotator = (rotator + 1) % len(names)
-
+            
         # Epoch summary
-        #dead_features = dead_tracker.report()
-        print(f"\n[Epoch {epoch+1}] Loss: {epoch_loss:.4f} | Time: {time.time() - start_time:.2f}s")
+        #print(dead_tracker)
+        dead_features = dead_tracker.get_dead_ratio()
+        print(f"\n[Epoch {epoch+1}] Loss: {epoch_loss:.4f} | Time: {time.time() - start_time:.2f}s | Dead Features: {dead_features*100:.1f}%")
+
+        total_loss_per_epoch.append(epoch_loss)
+        for name in names:
+            individual_loss_per_epoch[name].append(epoch_model_losses[name])
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(total_loss_per_epoch, label="Total Loss", linewidth=2)
+
+    for name in names:
+        plt.plot(individual_loss_per_epoch[name], label=f"{name} Loss")
+
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Loss per Epoch")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
 
     return 
