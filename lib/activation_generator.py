@@ -1,5 +1,5 @@
 import torch
-from data_handlers import Load_ImageNet100
+from lib.data_handlers import Load_ImageNet100
 from overcomplete.models import DinoV2, ViT, ResNet
 from torch.utils.data import DataLoader, TensorDataset
 import os

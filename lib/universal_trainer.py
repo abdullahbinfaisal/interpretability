@@ -117,10 +117,12 @@ def train_usae(names, models, dataloader, criterion, optimizers, schedulers=None
         #print(dead_tracker)
         dead_features = dead_tracker.get_dead_ratio()
         print(f"\n[Epoch {epoch+1}] Loss: {epoch_loss:.4f} | Time: {time.time() - start_time:.2f}s | Dead Features: {dead_features*100:.1f}%")
+            
 
         total_loss_per_epoch.append(epoch_loss)
         for name in names:
             individual_loss_per_epoch[name].append(epoch_model_losses[name])
+            print(f"{name} Loss: {individual_loss_per_epoch[name]}")
 
     plt.figure(figsize=(10, 6))
     plt.plot(total_loss_per_epoch, label="Total Loss", linewidth=2)
