@@ -142,12 +142,13 @@ def Load_activation_dataloader(models, image_dataloader, save_dir, generate, max
     
     dataset = PTFilesDataset(directory_path=save_dir)
 
+
     # Create image_dataloader
     activation_dataloader = DataLoader(
         dataset,
         batch_size=1,          # Adjust batch size as needed
         shuffle=True,           # Shuffle if training
-        drop_last=True        # Whether to drop last incomplete batch
+        drop_last=True,        # Whether to drop last incomplete batch
     )
 
     return activation_dataloader
