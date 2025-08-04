@@ -6,5 +6,6 @@
 /models
 /old
 /logs
-/__pycache__
+__pycache__
 /lib/__pycache__
+/old_tests

@@ -86,20 +86,21 @@ def train_usae(
             # Decoder across all models & accumulate loss
             for n, m in models.items():
 
-                if n == current:
-                    x_hat = m.decode(z)
-                else:
-                    with torch.no_grad():
-                        x_hat = m.decode(z.detach())
+                # if n == current:
+                #     x_hat = m.decode(z)
+                # else:
+                #     #with torch.no_grad():
+                        #x_hat = m.decode(z.detach())
+                x_hat = m.decode(z)
 
                 target = batch[f"activations_{n}"].squeeze().to(device)
                 loss = criterion(x_hat, target)
+                loss.backward() # Backprop here to free computational graph
 
                 epoch_model_losses[n] += loss.item()
                 total_loss += loss
 
-            # Backward + Optimize
-            total_loss.backward()
+
             if clip_grad is not None:
                 torch.nn.utils.clip_grad_norm_(sae.parameters(), clip_grad)
 

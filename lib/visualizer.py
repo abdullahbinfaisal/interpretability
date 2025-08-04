@@ -2,88 +2,157 @@ import matplotlib.pyplot as plt
 import torch
 from einops import rearrange
 import heapq
-from overcomplete.visualization.plot_utils import get_image_dimensions, interpolate_cv2, show
+from overcomplete.visualization.plot_utils import (
+    get_image_dimensions,
+    interpolate_cv2,
+    show,
+)
 from overcomplete.visualization.cmaps import VIRIDIS_ALPHA
-import os
+import itertools
+from pathlib import Path
+from tqdm import tqdm
+from concurrent.futures import ProcessPoolExecutor
+from copy import deepcopy
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def visualize_concept(activation_loader, SAEs, concept_id, save_dir, patch_width, n_images=10, abort_dead=False):
+def save_concept_plot(concept_id, save_dir):
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)  # Ensure the directory exists
+
+    filename = f"concept_{concept_id:04d}.png"
+    filepath = save_dir / filename
+    plt.savefig(filepath, bbox_inches="tight", dpi=300)
+
+
+def visualize_concepts(
+    activation_loader,
+    SAEs,
+    save_dir,
+    patch_width,
+    num_concepts,
+    n_images=10,
+    abort_threshold=0,
+):
     # Initialize a heap for each model that will store the (score, image) for ONE model
     heaps = {}
-    for name, sae in SAEs.items():
-        heaps[name] = [] 
-        sae.to(device) # Also send to device while we're at it
+    heaps = {
+        name: {concept_id: [] for concept_id in range(num_concepts)}
+        for name in SAEs.keys()
+    }
 
+    # Initialize Tie Breaker on Heaps
+    counter = itertools.count()
 
-    for batch in activation_loader:
+    #### OPTIMIZED VISUALIZER
+    for batch in tqdm(activation_loader):
 
         for name, sae in SAEs.items():
-            
-            # Forward pass this batch
+
+            # Encode only once
             with torch.no_grad():
-                _, heatmaps = sae.encode(batch[f'activations_{name}'].squeeze().to(device))
-                heatmaps = rearrange(heatmaps, '(n w h) d -> n w h d', w=patch_width, h=patch_width)
-            
-            # Calculate the top_ids in this batch
-            top_ids = torch.mean(heatmaps[:, :, :, concept_id], dim=(1, 2)).argsort()[-n_images:]  
+                _, heatmaps = sae.encode(
+                    batch[f"activations_{name}"].squeeze().to(device)
+                )
+                heatmaps = rearrange(
+                    heatmaps, "(n w h) d -> n w h d", w=patch_width, h=patch_width
+                )  # shape: [B, w, h, D]
+
+            B, w, h, D = heatmaps.shape
+
+            # Compute mean heatmap per image per concept: [B, D]
+            mean_heatmaps = heatmaps.mean(dim=(1, 2))  # shape: [B, D]
+
+            # Get top-k per concept efficiently using torch.topk
+            # indices: [k, D], values: [k, D]
+            topk_values, topk_indices = torch.topk(mean_heatmaps.T, k=n_images, dim=1)
+
+            for concept_id in range(D):
+
+                for rank in range(n_images):
+                    idx = topk_indices[concept_id, rank].item()
+                    score = topk_values[concept_id, rank].item()
+
+                    # Only proceed if this score is better than the worst in the heap, or heap not full AND score is not 0
+                    heap = heaps[name][concept_id]
+                    if (
+                        len(heap) < n_images or -score > heap[0][0]
+                    ) and score > abort_threshold:
+                        z = {
+                            "image": batch["images"].squeeze()[idx].cpu(),
+                            "heatmap": heatmaps[idx, :, :, concept_id].cpu(),
+                        }
+                        score_item = (-score, next(counter), z)
+
+                        if len(heap) < n_images:
+                            heapq.heappush(heap, score_item)
+                        else:
+                            heapq.heappushpop(heap, score_item)
+
+    with ProcessPoolExecutor() as executor:
+        args = ((concept, heaps, SAEs, n_images, save_dir) for concept in range(num_concepts))
+        list(tqdm(executor.map(lambda p: worker(*p), args), total=num_concepts))
 
 
-            for k, id in enumerate(top_ids):    
+def worker(concept, heaps, SAEs, n_images, save_dir):
+    if all(len(heaps[name][concept]) == 0 for name in SAEs.keys()):
+        return
+    else:
+        subset = {key: deepcopy(heaps[key][concept]) for key in SAEs.keys()}
+        plot_concept_grid(concept, subset, n_images, save_dir)
 
-                # Calculate score of each id in this batch                
-                score = torch.mean(heatmaps[id, :, :, concept_id], dim=(1, 2))
-                z =  {
-                    'image': batch['images'][id].cpu(), 
-                    'heatmap': heatmaps[id, :, :, concept_id]
-                }
 
-                # Maintain and Update the Top-n in a heap for this model: -score ensures its a max heap
-                score_item = (-score, z)
-                
-                if len(heaps[name]) < n_images:
-                    heapq.heappush(heaps[name], score_item)
-                else:
-                    heapq.heappushpop(heaps[name], score_item)
+def plot_concept_grid(concept_id, subset, n_images, save_dir):
+    """
+    Plots and saves the visualization grid for a single concept.
+    """
+    rows_per_model = 2
+    total_rows = len(subset) * rows_per_model
+    fig = plt.figure(figsize=(n_images * 2.5, total_rows * 2.5))
 
-    # If abort enabled, then validate if concept is dead, if it is, do nothing.
-    if abort_dead:
-        if not validate_dead(heaps):
-            return
+    for j, (name, _) in enumerate(subset.items()):
+        
+        heap = subset[name]
+        title_row = j * rows_per_model + 1
+        image_row_start = title_row + 1
 
-    # Once I have the top-n for each SAE for this concept
-    for j, (name, _) in enumerate(SAEs.items()):
+        # Title row
+        title_ax = plt.subplot(total_rows, n_images, (title_row - 1) * n_images + 1)
+        plt.axis("off")
+        plt.text(
+            0.5,
+            0.5,
+            name,
+            ha="center",
+            va="center",
+            fontsize=14,
+            weight="bold",
+            transform=title_ax.transAxes,
+        )
+
+        # Image rows
         for i in range(n_images):
-
-            image = heaps[name][i][1]['image']
-            heat = heaps[name][i][1]['heatmap']
-
-            width, height = get_image_dimensions(image)
-            heatmap = interpolate_cv2(heat, (width, height))
-
-            # Create the Image
-            plt.subplot(len(SAEs) * 2, n_images / 2, j + i + 1)
-            show(image)
-            show(heatmap, cmap=VIRIDIS_ALPHA, alpha=1.0)
             
-            # Save the Image
-            os.makedirs(save_dir, exist_ok=True)
-            filename = f"concept_{concept_id}.png"
-            filepath = os.path.join(save_dir, filename)
-            plt.savefig(filepath, bbox_inches='tight', dpi=300)
-            plt.close()  
+            if heap:
+                idx = (image_row_start - 1) * n_images + i + 1                
+                _, _, z = heapq.heappop(heap)
+                image, heat = z["image"], z["heatmap"]
 
+                width, height = get_image_dimensions(image)
+                heatmap = interpolate_cv2(heat, (width, height))
 
+                ax = plt.subplot(total_rows, n_images, idx)
+                ax.axis("off")
+                show(image)
+                show(heatmap, cmap=VIRIDIS_ALPHA, alpha=1.0)
+            
+            else:
+                ax = plt.subplot(total_rows, n_images, idx)
+                ax.axis("off")
+                show(torch.zeros(3, 224, 224))
 
-
-def validate_dead(heaps):
-    # Validate if there is ANY score that is greater than 0
-    for sae, heap in heaps.items():
-        score = -heap[0][0]
-        if score.item() > 0:
-            return True 
-
-    # If there is no score above 0, then return False.
-    return False
+    plt.tight_layout()
+    save_concept_plot(concept_id, save_dir)
+    plt.close()
