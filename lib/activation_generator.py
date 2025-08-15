@@ -26,7 +26,6 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 #     return mean, std
 
 def get_normalization_parameters(model):
-    # Normalize across 1024 samples
     image_loader = Load_ImageNet100(transform=None, batch_size=1024, shuffle=True)
     img, _ = next(iter(image_loader))
     
@@ -55,11 +54,13 @@ def generate_activations(models, image_dataloader, max_seq_len, save_dir, rearra
             batch_data = {'images': images.cpu()}
             for key, model in models.items():
                 
-                # Get Activations
-                if hasattr(model, 'featurizer'):
-                    activations = model.featurizer(images.to(device))
+                if hasattr(model, 'featurizer'): # for models trained using domainbed
+                    if model.featurizer.__class__.__name__ == "DinoV2":
+                        activations = model.featurizer.network.forward_features(images.to(device))['x_norm_patchtokens']
+                    else:
+                        activations = model.featurizer(images.to(device))
 
-                if hasattr(model, 'forward_features'):
+                if hasattr(model, 'forward_features'): # for models directly from the overcomplete library
                     activations = model.forward_features(images.to(device))
 
                 # Interpolate Activation Tokens
@@ -150,8 +151,6 @@ def Load_activation_dataloader(models, image_dataloader, save_dir, generate, max
     
     dataset = PTFilesDataset(directory_path=save_dir)
 
-
-    # Create image_dataloader
     activation_dataloader = DataLoader(
         dataset,
         batch_size=1,          # Adjust batch size as needed

@@ -95,12 +95,12 @@ def train_usae(
 
                 target = batch[f"activations_{n}"].squeeze().to(device)
                 loss = criterion(x_hat, target)
-                loss.backward() # Backprop here to free computational graph
-
+            
                 epoch_model_losses[n] += loss.item()
                 total_loss += loss
 
-
+            total_loss.backward()
+            
             if clip_grad is not None:
                 torch.nn.utils.clip_grad_norm_(sae.parameters(), clip_grad)
 
