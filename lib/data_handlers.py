@@ -1,14 +1,10 @@
+import os
 import torch
 from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
-import os
-from torchvision import transforms
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
-import os
-from PIL import Image
-from torch.utils.data import Dataset
-from torchvision import transforms
+from torch.utils.data import random_split
+
 
 class ImageNet100(Dataset):
     def __init__(self, root_dir, transform=None):
@@ -100,7 +96,7 @@ def Load_MNIST(train = True, batch_size = 64, shuffle = True, transform=None):
 
 
 
-def Load_ImageNet100(root_dir=r"C:\Users\sproj_ha\Desktop\vision_interp\datasets\imagenet100\train.X1", train=True, batch_size=64, shuffle=False, transform=None):
+def Load_ImageNet100(root_dir=r"C:\Users\sproj_ha\Desktop\vision_interp\datasets\imagenet100", train=True, batch_size=64, shuffle=False, transform=None, dataset=False):
     """
     Returns a DataLoader for the custom ImageNet-100 dataset.
 
@@ -115,7 +111,12 @@ def Load_ImageNet100(root_dir=r"C:\Users\sproj_ha\Desktop\vision_interp\datasets
         DataLoader: PyTorch DataLoader for ImageNet-100.
     """
     
-    
+    if train:
+        root_dir = os.path.join(root_dir, "train.X1")
+    else:
+        root_dir = os.path.join(root_dir, "val.X")
+
+
     if transform is None:
         transform = transforms.Compose([
             transforms.Resize(256),
@@ -128,8 +129,10 @@ def Load_ImageNet100(root_dir=r"C:\Users\sproj_ha\Desktop\vision_interp\datasets
     dataset = ImageNet100(root_dir=root_dir, transform=transform)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
     
-
-    return dataloader
+    if dataset == False:
+        return dataloader
+    else:
+        return dataloader, dataset
 
 
 
@@ -148,6 +151,8 @@ def Load_ImageNet100Sketch(root_dir=r"C:\Users\sproj_ha\Desktop\vision_interp\da
         DataLoader: PyTorch DataLoader for ImageNet-100.
     """
     
+    
+
     if transform is None:
         transform = transforms.Compose([
             transforms.Resize(256),
@@ -158,10 +163,20 @@ def Load_ImageNet100Sketch(root_dir=r"C:\Users\sproj_ha\Desktop\vision_interp\da
         ])
 
     dataset = ImageNet100(root_dir=root_dir, transform=transform)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
     
+    if train == False:
+        train_size = int(0.9 * len(dataset))  # 90% train
+        val_size = len(dataset) - train_size
+        train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+        
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+        
+        return train_loader, val_loader
 
-    return dataloader
+    else:
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
+        return dataloader
 
 
 class PACSAllDomains(Dataset):

@@ -309,7 +309,7 @@ def visualize_concepts(
                     # Only proceed if this score is better than the worst in the heap, or heap not full AND score is not 0
                     heap = heaps[name][concept_id]
                     if (
-                        len(heap) < n_images or -score > heap[0][0]
+                        len(heap) < n_images or score > -heap[0][0]
                     ) and score > abort_threshold:
                         z = {
                             "image": batch["images"].squeeze()[idx].cpu(),
