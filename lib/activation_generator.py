@@ -27,6 +27,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def get_normalization_parameters(model):
     image_loader = Load_ImageNet100(transform=None, batch_size=1024, shuffle=True)
+    
     img, _ = next(iter(image_loader))
     
     if hasattr(model, 'featurizer'):

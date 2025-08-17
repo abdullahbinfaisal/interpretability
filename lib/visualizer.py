@@ -278,6 +278,7 @@ def visualize_concepts(
     counter = itertools.count()
 
     #### OPTIMIZED VISUALIZER
+    print("Generating Activations")
     for batch in tqdm(activation_loader):
 
         for name, sae in SAEs.items():
@@ -294,13 +295,15 @@ def visualize_concepts(
             B, w, h, D = heatmaps.shape
 
             # Compute mean heatmap per image per concept: [B, D]
-            mean_heatmaps = heatmaps.mean(dim=(1, 2))  # shape: [B, D]
+            sum_heatmaps = heatmaps.sum(dim=(1, 2))  # shape: [B, D]
+
+            # indices: [k, D], values: [k, D]
+            topk_values, topk_indices = torch.topk(sum_heatmaps.T, k=n_images, dim=1)
 
             # Get top-k per concept efficiently using torch.topk
-            # indices: [k, D], values: [k, D]
-            topk_values, topk_indices = torch.topk(mean_heatmaps.T, k=n_images, dim=1)
-
             for concept_id in range(D):
+                
+                
 
                 for rank in range(n_images):
                     idx = topk_indices[concept_id, rank].item()
@@ -308,9 +311,8 @@ def visualize_concepts(
 
                     # Only proceed if this score is better than the worst in the heap, or heap not full AND score is not 0
                     heap = heaps[name][concept_id]
-                    if (
-                        len(heap) < n_images or score > -heap[0][0]
-                    ) and score > abort_threshold:
+                    
+                    if (len(heap) < n_images or score > -heap[0][0]) and score > abort_threshold:
                         z = {
                             "image": batch["images"].squeeze()[idx].cpu(),
                             "heatmap": heatmaps[idx, :, :, concept_id].cpu(),
@@ -322,11 +324,10 @@ def visualize_concepts(
                         else:
                             heapq.heappushpop(heap, score_item)
 
-    print(num_concepts)
-    for concept in range(num_concepts):
+    print("Saving Concepts")
+    for concept in tqdm(range(num_concepts)):
         #print("INSIDE FOR LOOP")
         if all(len(heaps[n][concept]) == 0 for n in SAEs.keys()):
-            print("Skipping cuz 0" )
             continue
         else:
             subset = {k: deepcopy(heaps[k][concept]) for k in SAEs.keys()}

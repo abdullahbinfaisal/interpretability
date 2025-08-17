@@ -96,7 +96,7 @@ def Load_MNIST(train = True, batch_size = 64, shuffle = True, transform=None):
 
 
 
-def Load_ImageNet100(root_dir=r"C:\Users\sproj_ha\Desktop\vision_interp\datasets\imagenet100", train=True, batch_size=64, shuffle=False, transform=None, dataset=False):
+def Load_ImageNet100(root_dir=r"C:\Users\sproj_ha\Desktop\vision_interp\datasets\imagenet100", train=True, batch_size=64, shuffle=False, transform=None, dataset_allow=False):
     """
     Returns a DataLoader for the custom ImageNet-100 dataset.
 
@@ -129,7 +129,7 @@ def Load_ImageNet100(root_dir=r"C:\Users\sproj_ha\Desktop\vision_interp\datasets
     dataset = ImageNet100(root_dir=root_dir, transform=transform)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
     
-    if dataset == False:
+    if not dataset_allow:
         return dataloader
     else:
         return dataloader, dataset

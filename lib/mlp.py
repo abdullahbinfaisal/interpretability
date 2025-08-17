@@ -1,4 +1,4 @@
-from data_handlers import Load_ImageNet100
+from lib.data_handlers import Load_ImageNet100
 import torch
 from tqdm import tqdm
 from einops import rearrange
@@ -36,61 +36,69 @@ def remap_predictions(logits, internal_map=None):
 
 
 
-def train_mlp(image_loader, mlp, optimizer, loss_fn, vit_full, sae, internal_map, alpha = 1, epochs=1):
+def train_mlp(image_loader, mlp, optimizer, loss_fn, vit_full, sae, internal_map, alpha=1.0, epoch=1):
     mlp.to(device)
     vit_full.to(device)
     sae.to(device)
     
-    for epoch in range(epochs):
-        epoch_loss = 0.0
-        pbar = tqdm(image_loader, desc=f"Epoch {epoch+1}/{epochs}", unit="batch")
+    
+    epoch_loss = 0.0
+    pbar = tqdm(image_loader, desc=f"Epoch {epoch}", unit="batch")
 
-        for images, labels in pbar:
-            images, labels = images.to(device), labels.to(device)
+    for images, labels in pbar:
+        images, labels = images.to(device), labels.to(device)
 
-            vit_full.eval()
-            with torch.no_grad():
-                # Get latent features & ViT predictions
-                latent = vit_full.forward_features(images)
-                predicted = vit_full.forward_head(latent)
+        vit_full.eval()
+        with torch.no_grad():
+            # Get latent features & ViT predictions
+            latent = vit_full.forward_features(images)
+            predicted = vit_full.forward_head(latent)
 
-                # Remap predictions to dataset indices
-                predicted = remap_predictions(predicted, internal_map=internal_map)
-                predicted = predicted.to(device)  # ensure predictions on device
+            # Remap predictions to dataset indices
+            predicted = remap_predictions(predicted, internal_map=internal_map)
+            predicted = predicted.to(device)  # ensure predictions on device
 
-                #print(predicted.shape)
+            #print(predicted.shape)
 
-                latent = latent[:, 1:]  # remove CLS token
-                
-                ## Filter for invalid Predictions
-                valid_mask = predicted != -1
+            latent = latent[:, 1:]  # remove CLS token
+            
+            ## Filter for invalid Predictions
+            valid_mask = predicted != -1
+            if valid_mask.any():
                 predicted = predicted[valid_mask]
                 latent = latent[valid_mask, :, :]
 
-                # SAE encode
-                latent = rearrange(latent, 'n t d -> (n t) d')
-                _, z = sae.encode(latent)
-                z = z.to(device)
-                z = rearrange(z, '(n t) d -> n t d', t=196)
-                z = z.sum(dim=1, keepdim=True)
-                z = z.flatten(start_dim=1)
-                #print("Latent Output Shape: ", z.shape)
+            else:
+                continue
 
-            mlp.train()
-            optimizer.zero_grad()
 
-            y_hat = mlp(z)
-            
-            l1_norm = sum(param.abs().sum() for name, param in mlp.named_parameters() if "weight" in name)
-            loss = loss_fn(y_hat, predicted) + alpha*l1_norm
+            # SAE encode
+            latent = rearrange(latent, 'n t d -> (n t) d')
+            _, z = sae.encode(latent)
+            z = z.to(device)
+            z = rearrange(z, '(n t) d -> n t d', t=196)
+            z = z.sum(dim=1, keepdim=True)
+            z = z.flatten(start_dim=1)
+            #print("Latent Output Shape: ", z.shape)
 
-            loss.backward()
-            optimizer.step()
+        mlp.train()
+        optimizer.zero_grad()
 
-            epoch_loss += loss.item()
-            pbar.set_postfix({"loss": f"{loss.item():.4f}"})
+        y_hat = mlp(z)
+        
+        l1_norm = sum(param.abs().sum() for name, param in mlp.named_parameters() if "weight" in name)
+        loss = loss_fn(y_hat, predicted) + alpha*l1_norm
 
-        print(f"Epoch {epoch+1} finished. Average loss: {epoch_loss / len(image_loader):.4f}")
+        loss.backward()
+        optimizer.step()
+
+        epoch_loss += loss.item()
+        pbar.set_postfix({"loss": f"{loss.item():.4f}"})
+
+    print(f"Epoch {epoch} finished. Average loss: {epoch_loss / len(image_loader):.4f}")
+    return epoch_loss
+
+
 
 
 def test_mlp(image_loader, mlp, loss_fn, vit_full, sae, internal_map):
@@ -170,3 +178,12 @@ def prune_weights(model, k=0.5):
     model.weight.data = sparse_W
 
     return model
+
+
+
+def check_sparsity(model):
+    sparse_W = model.weight.data
+    num_zero = (sparse_W == 0).sum().item()
+    num_total = sparse_W.numel()
+    sparsity = 100.0 * num_zero / num_total
+    return sparsity
