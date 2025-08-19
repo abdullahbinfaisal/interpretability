@@ -2,6 +2,7 @@ from lib.data_handlers import Load_ImageNet100
 import torch
 from tqdm import tqdm
 from einops import rearrange
+import matplotlib.pyplot as plt
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -52,7 +53,7 @@ def train_mlp(image_loader, mlp, optimizer, loss_fn, vit_full, sae, internal_map
         with torch.no_grad():
             # Get latent features & ViT predictions
             latent = vit_full.forward_features(images)
-            predicted = vit_full.forward_head(latent)
+            predicted = vit_full.forward_head(latent) 
 
             # Remap predictions to dataset indices
             predicted = remap_predictions(predicted, internal_map=internal_map)
@@ -109,6 +110,9 @@ def test_mlp(image_loader, mlp, loss_fn, vit_full, sae, internal_map):
     vit_full.eval()
     sae.eval()
     
+    all_softmax = []
+    all_entropy = []
+
     total_loss = 0.0
     correct = 0
     total = 0
@@ -145,6 +149,11 @@ def test_mlp(image_loader, mlp, loss_fn, vit_full, sae, internal_map):
             # MLP forward
             y_hat = mlp(z)
 
+            probs = torch.nn.functional.softmax(y_hat, dim=1)
+            all_softmax.append(probs.cpu())
+            entropy = -(probs * probs.log()).sum(dim=1)
+            all_entropy.append(entropy.cpu())
+
             # Loss
             loss = loss_fn(y_hat, predicted)
             total_loss += loss.item()
@@ -159,18 +168,18 @@ def test_mlp(image_loader, mlp, loss_fn, vit_full, sae, internal_map):
     avg_loss = total_loss / len(image_loader)
     accuracy = 100.0 * correct / total if total > 0 else 0.0
     print(f"Test finished. Avg loss: {avg_loss:.4f}, Accuracy: {accuracy:.2f}%")
-    return avg_loss, accuracy
+    return avg_loss, accuracy, torch.cat(all_softmax, dim=0), torch.cat(all_entropy, dim=0)
 
 
 
 
 
-def prune_weights(model, k=0.5):
-        
+def prune_weights(model, k=0.5):    
     W = model.weight.data  
     absW = W.abs()
 
     threshold = k * absW.std()
+    print(threshold, absW.std())
 
     sparse_W = W.clone()
     sparse_W[absW < threshold] = 0.0
@@ -186,4 +195,33 @@ def check_sparsity(model):
     num_zero = (sparse_W == 0).sum().item()
     num_total = sparse_W.numel()
     sparsity = 100.0 * num_zero / num_total
-    return sparsity
+    return sparsity, num_zero
+
+
+def plot_weight_histogram(model, bins=250):
+    W = model.weight.data.cpu().numpy().flatten()
+
+    plt.figure(figsize=(6, 4))
+    plt.hist(W, bins=bins, edgecolor='black')
+    plt.title("Histogram of MLP Weights")
+    plt.xlabel("Weight Value")
+    plt.ylabel("Frequency")
+    plt.grid(True, linestyle="--", alpha=0.6)
+    plt.show()
+
+
+def plot_weight_histogram_before_after(original_model, pruned_model, bins=250):
+    W_before = original_model.weight.data.cpu().numpy().flatten()
+    W_after  = pruned_model.weight.data.cpu().numpy().flatten()
+    total_weights = W_before.size
+
+    plt.figure(figsize=(7, 5))
+    plt.hist(W_before, bins=bins, alpha=0.5, label="Before Pruning", edgecolor='black')
+    plt.hist(W_after,  bins=bins, alpha=0.5, label="After Pruning",  edgecolor='black')
+    
+    plt.title(f"Histogram of MLP Weights (Total Weights = {total_weights})")
+    plt.xlabel("Weight Value")
+    plt.ylabel("Frequency")
+    plt.legend()
+    plt.grid(True, linestyle="--", alpha=0.6)
+    plt.show()
