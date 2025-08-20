@@ -9,3 +9,6 @@
 __pycache__
 /lib/__pycache__
 /old_tests
+/embedding_viz/__pycache__
+/embedding_viz/data
+/embedding_viz/demo_out
