@@ -179,8 +179,7 @@ def prune_weights(model, k=0.5):
     absW = W.abs()
 
     threshold = k * absW.std()
-    print(threshold, absW.std())
-
+    
     sparse_W = W.clone()
     sparse_W[absW < threshold] = 0.0
 
@@ -225,3 +224,27 @@ def plot_weight_histogram_before_after(original_model, pruned_model, bins=250):
     plt.legend()
     plt.grid(True, linestyle="--", alpha=0.6)
     plt.show()
+
+
+
+def aggregator(sparse_mlps):
+
+    # Matrices
+    matrices = [w.weight.detach().cpu() for _, w in sparse_mlps.items()]
+
+    # Aggregator
+    aggregator = torch.stack(matrices, dim=0)
+    
+    print("D x C x F")
+    print(aggregator.shape)
+
+
+    aggregated = aggregator.sum(dim=0)
+
+    print(aggregated.shape)
+    print()
+
+
+
+
+   
